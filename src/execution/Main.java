@@ -8,6 +8,8 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,9 +20,8 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 public class Main {
-	@SuppressWarnings("static-access")
-	public static Set<String> urls = new ConcurrentHashMap<>().newKeySet();
-	public static Map<String, String> sources = new ConcurrentHashMap<>();
+	public static Set<String> urls = Collections.synchronizedSet(new HashSet<>());
+	public static Set<String> sources = Collections.synchronizedSet(new HashSet<>());
 	
 	public static void main(String[] args) {
 		if (args.length != 1) {
@@ -28,31 +29,18 @@ public class Main {
 			return;
 		}
 		
-		Instant i1 = Instant.now();
 		getSubUrls(args[0]);
 		urls.forEach((url) -> {
 			getSubUrls(url);
 		});
-		Instant i2 = Instant.now();
-		Duration dur = Duration.between(i1, i2);
-		System.out.println("Total subURLs: " + urls.size() + " Benchmark(sec): " + dur.toSeconds());
 		
-		i1 = Instant.now();
 		urls.forEach((url) -> {
 			getImageSources(url);
 		});
-		i2 = Instant.now();
-		dur = Duration.between(i1, i2);
-		System.out.println("imgSrcCollector Benchmark(sec): " + dur.toSeconds());
-		System.out.println("Sources count: " + sources.size());
 		
-		i1 = Instant.now();
-		sources.forEach((url, source) -> {
-			downloadImage(url, source);
+		sources.forEach((source) -> {
+			downloadImage(source);
 		});
-		i2 = Instant.now();
-		dur = Duration.between(i1, i2);
-		System.out.println("imgDownloader Benchmark(sec): " + dur.toSeconds());
 		System.out.println("Done");
 	}
 
@@ -61,7 +49,8 @@ public class Main {
 		try {			
 			doc = Jsoup.connect(url).get();
 		} catch (IOException e) {
-			e.printStackTrace();
+			System.out.println("Error: " + e.getMessage());
+			return;
 		}
 		
 		Elements links = doc.select("a[href]");
@@ -75,7 +64,7 @@ public class Main {
 		
 		System.out.println("Total subURLs: " + urls.size());
 	}
-	
+	//TODO: merge with getSubUrls
 	private static void getImageSources(String url) {
 		Document document = null;
 	    
@@ -85,7 +74,7 @@ public class Main {
 	    	e.printStackTrace();
 	    }
 		
-    	Elements images = document.select("img[src~=(?i)\\.(png|jpe?g|gif)]"); 
+    	Elements images = document.select("img[src]"); 
     	
     	for (Element image : images) {
     		String src = image.attr("src");
@@ -98,24 +87,21 @@ public class Main {
 	}
 	
 	private static void downloadImage(String parentUrl, String source) {
-		try{ 
-	         System.out.println("Downloading Image From: " + parentUrl);
-	         
+		System.out.println("Downloading Image From: " + parentUrl);
+		
+		try{ 	         
 	         URL sourceUrl = new URL(source);
-	         System.out.println("Source:" + sourceUrl.toString());
+//	         System.out.println("Source:" + sourceUrl.toString());
 	         URL url = new URL(parentUrl);
-	         InputStream inputStream = url.openStream();
-	         OutputStream outputStream = new FileOutputStream(source);
-	         byte[] buffer = new byte[2048];
-	         
-	         int length = 0;
-	         
-	         while ((length = inputStream.read(buffer)) != -1) 
-	            outputStream.write(buffer, 0, length);
-	         
-	         inputStream.close();
-	         outputStream.close();
-	         
+	         try (InputStream inputStream = url.openStream(); 
+	        	  OutputStream outputStream = new FileOutputStream(source)) {
+	        	 byte[] buffer = new byte[2048];
+		         
+		         int length = 0;
+		         
+		         while ((length = inputStream.read(buffer)) != -1) 
+		            outputStream.write(buffer, 0, length);
+	         }
 	      } catch(Exception e) {
 	         e.printStackTrace();
 	      }
