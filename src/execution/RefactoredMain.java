@@ -1,13 +1,23 @@
 package execution;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -25,8 +35,11 @@ public class RefactoredMain {
 	public static Set<String> urls;
 	public static Set<String> sources;
 	public static Options options;
+	public static AtomicInteger imgCounter = new AtomicInteger();
 	
-	public static void main(String[] args) {
+	public static String targetDirPath = "C:\\Users\\night\\Desktop\\Java Internship\\Web Crawler\\img";
+	
+	public static void main(String[] args) throws URISyntaxException, IOException, InterruptedException {
 		topUrls = Collections.synchronizedSet(new HashSet<>());
 		urls = Collections.synchronizedSet(new HashSet<>());
 		sources = Collections.synchronizedSet(new HashSet<>());
@@ -34,18 +47,20 @@ public class RefactoredMain {
 		
 		createOptions();
 		
+		downloadImage(" ");
+		
 		try {
 			parseOptions(args);
 		} catch (ParseException e) {
 			System.out.println("Error: " + e.getMessage());
 		}
-		
+	
 		for (String str : args)
 			if (validateUrl(str)) {
 				topUrls.add(str);
 				crawlPage(str);
 			}
-		
+			
 		urls.forEach((url) -> {
 			crawlPage(url);
 		});
@@ -87,6 +102,7 @@ public class RefactoredMain {
 	
 		for (Element link : links) {
 			String subUrl = link.attr("abs:href");
+
 			if (subUrl.lastIndexOf("#") == -1 && isSubUrl(subUrl)) {
 				for (Element image : images) {
 		    		String src = image.attr("src");
@@ -94,7 +110,14 @@ public class RefactoredMain {
 		    		if (sources.contains(src))
 		    			continue;
 		    		
-		    		downloadImage(subUrl, src);
+		    		if (src.indexOf("https://") != 0)
+		    			continue;
+		    		
+		    		try {
+						downloadImage(src);
+					} catch (URISyntaxException | IOException | InterruptedException e) {
+						System.out.println("Failed to download image: " + src);
+					}
 		    		
 		    		sources.add(src);
 		    	}
@@ -110,25 +133,29 @@ public class RefactoredMain {
 		return false;
 	}
 	
-	private static void downloadImage(String parentUrl, String source) {
-		int questionMarkIndex = source.indexOf("?");
-		if (questionMarkIndex != -1)
-			source = source.substring(0, questionMarkIndex);
+	private static void downloadImage(String source) throws URISyntaxException, IOException, InterruptedException {
+		HttpClient client = HttpClient.newHttpClient();
 		
-		try{ 	         
-	         URL url = new URL(parentUrl);
-	         try (InputStream inputStream = url.openStream(); 
-	        	  OutputStream outputStream = new FileOutputStream(source)) {
-	        	 byte[] buffer = new byte[2048];
-		         
-		         int length = 0;
-		         
-		         while ((length = inputStream.read(buffer)) != -1) 
-		            outputStream.write(buffer, 0, length);
-	         }
-	      } catch(Exception e) {
-	         e.printStackTrace();
-	      }
+		String url1 = "https://wow.zamimg.com/images/wow/journal/ui-ej-boss-grobbulus.png";
+		String url2 = "//cdn.shopify.com/s/files/1/0075/8526/7775/products/0031627fa5b4a012f9d5e18f5f028c3f_720x.jpg?v=1630286207";
+		
+		URI uri = new URI(url1);
+		HttpRequest request = HttpRequest.newBuilder()
+							  .uri(uri)
+							  .GET()
+							  .build();
+		
+		
+		HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+		System.out.println(response.body().length);
+		
+		String fileType = response.headers().firstValue("Content-Type").get();
+		int backslashIndex = fileType.indexOf("/");
+		fileType = fileType.substring(backslashIndex + 1, fileType.length());
+		
+		System.out.println(fileType);
+		Path path = Paths.get("img\\bruh2." + fileType);
+		Files.write(path, response.body());
 	}
 	
 	private static void parseOptions(String[] args) throws ParseException {
@@ -154,7 +181,6 @@ public class RefactoredMain {
 		Option imageFormat = new Option("imageFormat", false, null);
 		Option userAgent = new Option("userAgent", false, null);
 		
-		//Each option accepts a single argument
 		outputDir.setArgs(1);
 		imageFormat.setArgs(1);
 		userAgent.setArgs(1);

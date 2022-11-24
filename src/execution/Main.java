@@ -1,110 +1,188 @@
 package execution;
 
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
-import java.time.Instant;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-public class Main {
-	public static Set<String> urls = Collections.synchronizedSet(new HashSet<>());
-	public static Set<String> sources = Collections.synchronizedSet(new HashSet<>());
+class Main {
+	public static Options options;
+	public static HttpClient client;
 	
-	public static void main(String[] args) {
-		if (args.length != 1) {
-			System.out.println("Crawl accepts a single argument!(crawl <url>)");			
-			return;
-		}
+	public static Set<String> topUrls;
+	public static BlockingQueue<String> subUrls;
+	public static Set<String> visitedUrls;
+	public static Set<String> sources;
+	public static Set<String> downloadedSources;
+	
+	public static AtomicInteger imgCounter;
+	public static AtomicInteger urlCounter;
+	
+	private static ExecutorService threadPool;
+	
+	public static void main(String[] args)  {
+		options = new Options();
+		createOptions();
 		
-		getSubUrls(args[0]);
-		urls.forEach((url) -> {
-			getSubUrls(url);
-		});
-		
-		urls.forEach((url) -> {
-			getImageSources(url);
-		});
-		
-		sources.forEach((source) -> {
-			downloadImage(source);
-		});
-		System.out.println("Done");
-	}
-
-	private static void getSubUrls(String url) {
-		Document doc = null;
-		try {			
-			doc = Jsoup.connect(url).get();
-		} catch (IOException e) {
+		try {
+			parseOptions(args);
+		} catch (ParseException e) {
 			System.out.println("Error: " + e.getMessage());
-			return;
 		}
+		
+		client = HttpClient.newHttpClient();
+		
+		topUrls = Collections.synchronizedSet(new HashSet<>());
+		subUrls = new LinkedBlockingQueue<>();
+		visitedUrls = Collections.synchronizedSet(new HashSet<>());
+		sources = Collections.synchronizedSet(new HashSet<>());
+		downloadedSources = Collections.synchronizedSet(new HashSet<>());
+		
+		imgCounter = new AtomicInteger(1);
+		urlCounter = new AtomicInteger(0);
+		
+		for (String str : args) {
+			if (validateUrl(str)) {
+				topUrls.add(str);
+				try {
+					crawlPage(str);
+				} catch (URISyntaxException | IOException | InterruptedException e) {
+					//TODO: Notify user
+				}
+			}
+		}
+		
+		threadPool = Executors.newFixedThreadPool(20);
+		AtomicInteger runningTasks = new AtomicInteger(0);
+		do {
+			System.out.println(topUrls.size());
+			threadPool.submit(new Runnable() {
+				public void run() {
+					runningTasks.incrementAndGet();
+					System.out.println(runningTasks + " AAAAAAAAAAA");
+					String url = null;
+					try {
+						do {
+							url = subUrls.take();							
+						} while (!isSubUrl(url) || visitedUrls.contains(url));
+
+						System.out.println("Crawling: " + url);
+						visitedUrls.add(url);
+						crawlPage(url);
+						urlCounter.incrementAndGet();
+					} catch (URISyntaxException | IOException | InterruptedException e) {
+						System.out.println("Error: Could not crawl " + url);
+					} finally {
+						runningTasks.decrementAndGet();
+						System.out.println(runningTasks + " BBBBBBBB");
+					}
+				}
+			});
+		} while (runningTasks.get() > 0);
+		
+		System.out.println("\n\n\n\n");
+		for (String url : visitedUrls) {
+			System.out.println(url);
+		}
+		
+		System.out.println("SHUTTING DOWN");
+		System.out.println("TOTAL URLS: " + urlCounter);
+	}
+	
+	private static boolean validateUrl(String url) {
+		try {
+			new URL(url).toURI();
+			return true;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+	
+	private static boolean isSubUrl(String url) {
+		for (String topUrl : topUrls)
+			if (url.indexOf(topUrl) == 0)
+				return true;
+		return false;
+	}
+	
+	private static void crawlPage(String url) throws URISyntaxException, IOException, InterruptedException  {
+		Document doc = Jsoup.parse(getHtml(url));
 		
 		Elements links = doc.select("a[href]");
 		
 		for (Element link : links) {
-			String subURL = link.attr("abs:href");
-			if (subURL.lastIndexOf("#") == -1 && subURL.lastIndexOf(url) != -1)	{
-				urls.add(subURL);
-			}
+			String subUrl = link.attr("abs:href");
+			
+			if (subUrl.lastIndexOf("#") == -1 && isSubUrl(subUrl))
+				subUrls.add(subUrl);				
 		}
 		
-		System.out.println("Total subURLs: " + urls.size());
-	}
-	//TODO: merge with getSubUrls
-	private static void getImageSources(String url) {
-		Document document = null;
-	    
-		try {
-	    	document = Jsoup.connect(url).get();
-	    } catch (IOException e) {
-	    	e.printStackTrace();
-	    }
-		
-    	Elements images = document.select("img[src]"); 
-    	
-    	for (Element image : images) {
-    		String src = image.attr("src");
-    		
-    		if (src.startsWith("//"))
-    			src = "https:" + src;
-    		
-    		sources.put(url, src);
-    	}
 	}
 	
-	private static void downloadImage(String parentUrl, String source) {
-		System.out.println("Downloading Image From: " + parentUrl);
+	private static String getHtml(String url) throws URISyntaxException, IOException, InterruptedException {
+		HttpRequest request = HttpRequest.newBuilder()
+				.uri(new URI(url))
+				.GET()
+				.build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		return response.body();
+	}
+	
+	//TODO: Add functionality
+	private static void parseOptions(String[] args) throws ParseException {
+		CommandLineParser parser = new DefaultParser();
+		CommandLine cmd = parser.parse(options, args);
 		
-		try{ 	         
-	         URL sourceUrl = new URL(source);
-//	         System.out.println("Source:" + sourceUrl.toString());
-	         URL url = new URL(parentUrl);
-	         try (InputStream inputStream = url.openStream(); 
-	        	  OutputStream outputStream = new FileOutputStream(source)) {
-	        	 byte[] buffer = new byte[2048];
-		         
-		         int length = 0;
-		         
-		         while ((length = inputStream.read(buffer)) != -1) 
-		            outputStream.write(buffer, 0, length);
-	         }
-	      } catch(Exception e) {
-	         e.printStackTrace();
-	      }
+		if (cmd.hasOption("outputDir")) {
+			String val = (String)cmd.getParsedOptionValue(options.getOption("outputDir"));
+			
+		} 
+		if (cmd.hasOption("imageFormat")) {
+			String val = (String)cmd.getParsedOptionValue(options.getOption("imageFormat"));
+			
+		}
+		if (cmd.hasOption("userAgent")) {
+			String val = (String)cmd.getParsedOptionValue(options.getOption("userAgent"));
+			
+		}
+	}
+	
+	private static void createOptions() {
+		Option outputDir = new Option("outputDir", false, null);
+		Option imageFormat = new Option("imageFormat", false, null);
+		Option userAgent = new Option("userAgent", false, null);
+		
+		outputDir.setArgs(1);
+		imageFormat.setArgs(1);
+		userAgent.setArgs(1);
+		
+		options.addOption(outputDir);
+		options.addOption(imageFormat);
+		options.addOption(userAgent);
 	}
 }
-
