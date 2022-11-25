@@ -1,7 +1,6 @@
 package execution;
 
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -32,30 +31,38 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 class Main {
-	public static Options options;
-	public static HttpClient client;
+	private static Options options;
+	private static HttpClient client;
 	
-	public static Set<String> topUrls;
-	public static BlockingQueue<String> subUrlsBQ;
-	public static Set<String> subUrlsSet;
-	public static Set<String> visitedUrls;
-//	public static Set<String> sources;
-	public static Set<String> downloadedSources;
+	private static Set<String> topUrls;
+	private static BlockingQueue<String> subUrlsBQ;
+	private static Set<String> subUrlsSet;
+	private static Set<String> visitedUrls;
+	private static Set<String> downloadedSources;
 	
-	public static AtomicInteger imgCounter;
-	public static AtomicInteger urlCounter;
+	private static AtomicInteger imgCounter;
+	private static AtomicInteger urlCounter;
 	private static AtomicInteger runningTasks;
 	
 	private static ExecutorService threadPool;
 	
+	private static Path downloadDir;
+	private static Set<String> commonImageFormats;
+	private static Set<String> specifiedFormats;
+	
 	public static void main(String[] args)  {
 		options = new Options();
+		
+		commonImageFormats = Set.of("gif", "jpeg", "jpg", "png", "tiff", "x-icon", "svg+xml");
+		downloadDir = Path.of("C:\\Users\\night\\Desktop\\Java Internship\\Web Crawler\\img\\");
+		
 		createOptions();
 		
 		try {
 			parseOptions(args);
 		} catch (ParseException e) {
 			System.out.println("Error: " + e.getMessage());
+			return;
 		}
 		
 		client = HttpClient.newHttpClient();
@@ -64,7 +71,6 @@ class Main {
 		subUrlsBQ = new LinkedBlockingQueue<>();
 		subUrlsSet = Collections.synchronizedSet(new HashSet<>());
 		visitedUrls = Collections.synchronizedSet(new HashSet<>());
-//		sources = Collections.synchronizedSet(new HashSet<>());
 		downloadedSources = Collections.synchronizedSet(new HashSet<>());
 		
 		imgCounter = new AtomicInteger(1);
@@ -171,6 +177,7 @@ class Main {
 		visitedUrls.add(url);
 	}
 	
+	//TODO: FIX DOWNLOADFOLDER
 	private static void downloadImages(Document doc) {
 		Elements imageSources = doc.select("img[src]");
 		
@@ -193,10 +200,20 @@ class Main {
 				} catch (IOException | InterruptedException e) {}
 				
 				String fileType = response.headers().firstValue("Content-Type").get();
+				
 				int backslashIndex = fileType.indexOf("/");
 				fileType = fileType.substring(backslashIndex + 1, fileType.length());
 //				System.out.println("DOWNLOAD SIZE: " + response.body().length);
-				String path = String.format("C:\\Users\\night\\Desktop\\Java Internship\\Web Crawler\\img\\image%d.%s", System.currentTimeMillis(), fileType);
+				if (!specifiedFormats.contains(fileType))
+					continue;
+				if (!new File(downloadDir.toAbsolutePath().toString()).exists())
+					try {
+						Files.createDirectories(downloadDir);
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				
+				String path = String.format("%simage%d.%s", downloadDir, System.currentTimeMillis(), fileType);
 //				System.out.println("DOWNLOAD NAME: " + path);
 				File newImg = new File(path);
 				try { newImg.createNewFile(); } catch (IOException e) {}
@@ -226,22 +243,27 @@ class Main {
 		return response.body();
 	}
 	
-	//TODO: Add functionality
 	private static void parseOptions(String[] args) throws ParseException {
 		CommandLineParser parser = new DefaultParser();
 		CommandLine cmd = parser.parse(options, args);
 		
 		if (cmd.hasOption("outputDir")) {
 			String val = (String)cmd.getParsedOptionValue(options.getOption("outputDir"));
-			
+	
+			downloadDir = Path.of(val);
 		} 
 		if (cmd.hasOption("imageFormat")) {
 			String val = (String)cmd.getParsedOptionValue(options.getOption("imageFormat"));
 			
+			specifiedFormats = Set.of(val.split(","));
+			
+			for (String format : specifiedFormats)
+				if (!commonImageFormats.contains(format))
+					throw new ParseException("Invalid format: " + format);
 		}
 		if (cmd.hasOption("userAgent")) {
 			String val = (String)cmd.getParsedOptionValue(options.getOption("userAgent"));
-			
+			//TODO: Ask for clarification!
 		}
 	}
 	
